@@ -36,6 +36,17 @@ _propagate_toplevel = transition(
     outputs = [TOPLEVEL_FLAG],
 )
 
+def _stop_propagation_impl(settings, attr):
+    return {
+        TOPLEVEL_FLAG: EMPTY_TOPLEVEL,
+    }
+
+_stop_propagation = transition(
+    implementation = _stop_propagation_impl,
+    inputs = [],
+    outputs = [TOPLEVEL_FLAG],
+)
+
 def _py_library_deps_impl(ctx):
     if bool(ctx.attr.toplevel) == bool(ctx.attr.py_library):
         fail("Exactly one of toplevel and py_library must be set")
@@ -99,18 +110,21 @@ def _py_native_module_impl(ctx):
         target_path = target_label.package,
         target_name = target_label.name.replace(PLACEHOLDER_NAME, NATIVE_DEPS_NAME),
     )
-    runfiles = ctx.runfiles([module]).merge(ctx.attr.cc_library.default_runfiles)
+    runfiles = ctx.runfiles([module]).merge(ctx.attr.cc_library[0].default_runfiles)
     return [
         DefaultInfo(runfiles = runfiles),
-        PyNativeLibrary(linking_context = ctx.attr.cc_library[CcInfo].linking_context),
+        PyNativeLibrary(linking_context = ctx.attr.cc_library[0][CcInfo].linking_context),
     ]
 
 py_native_module = rule(
     implementation = _py_native_module_impl,
     fragments = ["cpp"],
     attrs = {
-        "cc_library": attr.label(),
+        "cc_library": attr.label(cfg = _stop_propagation),
         "_toplevel": attr.label(default = TOPLEVEL_FLAG),
         "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
+        "_whitelist_function_transition": attr.label(
+            default = "@bazel_tools//tools/whitelists/function_transition_whitelist",
+        ),
     },
 )
