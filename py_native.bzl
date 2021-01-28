@@ -57,9 +57,10 @@ def _py_library_deps_impl(ctx):
 
     if not ctx.attr.toplevel:
         return [
-            DefaultInfo(runfiles = ctx.attr.py_library.default_runfiles),
-            PyNativeDepset(deps = all_deps),
+            ctx.attr.py_library[DefaultInfo],
             ctx.attr.py_library[PyInfo],
+            ctx.attr.py_library[OutputGroupInfo],
+            PyNativeDepset(deps = all_deps),
         ]
 
     runfiles = ctx.runfiles()
