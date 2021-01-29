@@ -38,7 +38,7 @@ def link_so(ctx, name, compilation_outputs = None, linking_contexts = [], link_d
     )
     return linking_outputs.library_to_link.resolved_symlink_dynamic_library
 
-def link_with_placeholder(ctx, output, target_path, target_name):
+def link_with_placeholder(ctx, output, target_label):
     """Creates a shared library linked against a library that doesn't yet exist.
 
     This is useful for creating a module library that depending on the native
@@ -76,13 +76,13 @@ def link_with_placeholder(ctx, output, target_path, target_name):
     """
     cc_toolchain, feature_configuration = _cc_toolchain_info(ctx)
 
-    if "/" in output.short_path or target_path:
-        levels_up = output.short_path.count("/")
-        rpath = "../" * levels_up + target_path
-    else:
-        rpath = "."
+    target_path = "/".join([
+        target_label.workspace_name or ctx.workspace_name,
+        target_label.package,
+    ]).strip("/")
+    target_name = target_label.name
 
-    # We keep the placeholder in a subdirectory named after this label to avoid
+    # We keep the placeholder in a subdirectory named after the label to avoid
     # conflicts between targets in the same package that link against it.
     tmpdir = "_%s" % ctx.label.name
     placeholder = ctx.actions.declare_file(
@@ -92,11 +92,19 @@ def link_with_placeholder(ctx, output, target_path, target_name):
         name = "_%s__%s__%s" % (tmpdir, target_path, target_name),
         compilation_outputs = compile(ctx = ctx, name = "empty", srcs = []),
     ))
-    tmp_output = ctx.actions.declare_file("%s/%s" % (tmpdir, output.short_path))
+    tmp_output = ctx.actions.declare_file(
+        "%s/%s/%s" % (tmpdir, ctx.workspace_name, output.short_path))
+
+    # If the output belongs to another workspace, its short path starts with ../.
+    levels_up = output.short_path.count("/") + (-1 if output.owner.workspace_name else 1)
+    rpath = "../" * levels_up + target_path
 
     # We invoke the linker directly (through the compiler wrapper) so we have
     # perfect control over the paths.
     ctx.actions.run_shell(
+        mnemonic = "CcLinkWithPlaceholder",
+        progress_message = "Linking %s with placeholder for %s/lib%s.so" % (
+            output.short_path, target_path, target_name),
         inputs = [placeholder],
         outputs = [tmp_output],
         tools = cc_toolchain.all_files,

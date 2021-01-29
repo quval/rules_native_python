@@ -1,8 +1,12 @@
-load(":py_native.bzl", "EMPTY_TOPLEVEL")
+load(":py_native.bzl", "nativedeps")
 
-filegroup(name = EMPTY_TOPLEVEL.name)
-label_flag(
-    name = "toplevel",
-    build_setting_default = EMPTY_TOPLEVEL,
+label_setting(
+    name = "actual_nativedeps",
+    build_setting_default = "//:all",  # Just a placeholder.
+    visibility = ["//visibility:public"],
+)
+
+nativedeps(
+    name = "nativedeps",
     visibility = ["//visibility:public"],
 )

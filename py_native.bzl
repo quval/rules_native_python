@@ -1,131 +1,163 @@
 """Rules for handling native dependencies for Python targets.
 
-Provides two rules:
-- py_library_deps: tracks the transitive dependencies of a py_* rule. When a
-  toplevel target (py_binary or py_test) is given, all the native dependencies
-  are linked together into a statically-linked shared object. Otherwise, it
-  acts as a thin wrapper around the given py_library.
+Provides four rules:
+- py_library_deps: tracks the transitive dependencies of a py_* rule through
+  an aspect, and statically links all the native dependencies together into a
+  shared object.
 - py_native_module: provides the linking context of a cc_library so it can be
-  linked into the native deps library, and provides an empty shared object that
-  is dynamically linked into it instead.
+  linked into the native deps library and a PyInfo for inclusion as a Python
+  dependency. Through an aspect, provides an empty shared object that is
+  dynamically linked to the native deps library, which is assumed to be present
+  at a known location.
+- nativedeps: meant to be instantiated once (by this library), it provides an
+  empty shared object that is dynamically linked to the native deps library.
+  It uses a transition to adjust the location of the real native deps library,
+  so py_native_modules don't have to.
+- configure_nativedeps: exists mostly to just pass the py_library_deps target on
+  to the global nativedeps target via the transition, and to provide back the
+  configured nativedeps library. It wouldn't be necessary if it were possible to
+  pass in the current target through a transition. An alternative would be
+  replacing the actual py_binary/py_test with a wrapper, but to do this right,
+  we may have to expose providers properly, have duplicate rules for setting the
+  executable/test properties right, and make a copy of the executable - which is
+  annoying both if we keep it and if we prune it from the runfiles. Using three
+  targets for a toplevel Python target is certainly messier, but it feels safer.
 
-The toplevel target is propagated from py_library_deps into py_native_modules
-using a transition. Unfortunately, it is impossible to pass in the actual
-native deps target through the transition, so we link against an empty
-placeholder library.
+Linking against empty placeholders, and then providing the real libraries
+manually, allows us to avoid transitions for all but one shared object (which is
+empty itself) and save some double work.
+
+Note that since we're using transitions, py_binaries with native dependencies
+should be passed to genrules as exec_tools (rather than tools).
 """
 
 load(":cc_tools.bzl", "link_so", "link_with_placeholder")
 
-EMPTY_TOPLEVEL = Label("@rules_native_python//:empty")
-TOPLEVEL_FLAG = "@rules_native_python//:toplevel"
-PLACEHOLDER_NAME = "_placeholder"
-NATIVE_DEPS_NAME = "_native_deps"
+NATIVEDEPS_TARGET = Label("@rules_native_python//:nativedeps")
+ACTUAL_NATIVEDEPS_SETTING = "@rules_native_python//:actual_nativedeps"
 
-PyNativeDepset = provider(fields = ["deps"])
-PyNativeLibrary = provider(fields = ["linking_context"])
+PyNativeModule = provider(fields = ["runfiles", "cc_info"])
+PyNativeDepset = provider(fields = ["runfiles", "cc_infos"])
+PyNativeDepsLib = provider(fields = ["dynamic_library"])
 
-def _propagate_toplevel_impl(settings, attr):
-    return {
-        TOPLEVEL_FLAG: attr.toplevel or settings[TOPLEVEL_FLAG],
-    }
-
-_propagate_toplevel = transition(
-    implementation = _propagate_toplevel_impl,
-    inputs = [TOPLEVEL_FLAG],
-    outputs = [TOPLEVEL_FLAG],
-)
-
-def _stop_propagation_impl(settings, attr):
-    return {
-        TOPLEVEL_FLAG: EMPTY_TOPLEVEL,
-    }
-
-_stop_propagation = transition(
-    implementation = _stop_propagation_impl,
-    inputs = [],
-    outputs = [TOPLEVEL_FLAG],
-)
-
-def _py_library_deps_impl(ctx):
-    if bool(ctx.attr.toplevel) == bool(ctx.attr.py_library):
-        fail("Exactly one of toplevel and py_library must be set")
-
-    all_deps = depset(direct = ctx.attr.native_deps, transitive = [
-        dep[PyNativeDepset].deps for dep in ctx.attr.deps if PyNativeDepset in dep
-    ])
-
-    if not ctx.attr.toplevel:
-        return [
-            ctx.attr.py_library[DefaultInfo],
-            ctx.attr.py_library[PyInfo],
-            ctx.attr.py_library[OutputGroupInfo],
-            PyNativeDepset(deps = all_deps),
-        ]
-
-    runfiles = ctx.runfiles()
-    linking_contexts = []
-    for dep in all_deps.to_list():
-        runfiles = runfiles.merge(dep.default_runfiles)
-        linking_contexts.append(dep[PyNativeLibrary].linking_context)
-    runfiles = runfiles.merge(ctx.runfiles([link_so(
-        ctx = ctx,
-        name = ctx.label.name,
-        linking_contexts = linking_contexts,
-        stamp = ctx.attr.stamp,
-    )]))
-    return [
-        DefaultInfo(runfiles = runfiles),
-        PyNativeDepset(deps = all_deps),
-    ]
-
-py_library_deps = rule(
-    implementation = _py_library_deps_impl,
-    cfg = _propagate_toplevel,
-    fragments = ["cpp"],
-    attrs = {
-        "deps": attr.label_list(),
-        "native_deps": attr.label_list(),
-        "py_library": attr.label(),
-        "stamp": attr.int(default = -1),
-        "toplevel": attr.label(),
-        "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
-        "_whitelist_function_transition": attr.label(
-            default = "@bazel_tools//tools/whitelists/function_transition_whitelist",
-        ),
-    },
-)
+def _merge_runfiles(runfiles, runfiles_list):
+    for r in runfiles_list:
+        runfiles = runfiles.merge(r)
+    return runfiles
 
 def _py_native_module_impl(ctx):
-    target_label = ctx.attr._toplevel.label
-    if target_label == EMPTY_TOPLEVEL:
-        return
-
-    # We cannot link with the actual native deps library, so we link with an
-    # empty placeholder. The right library is provided by the py_library_deps
-    # target (which will have propagated _toplevel, or we wouldn't get here).
-    module = ctx.actions.declare_file(ctx.label.name + ".so")
-    link_with_placeholder(
-        ctx = ctx,
-        output = module,
-        target_path = target_label.package,
-        target_name = target_label.name.replace(PLACEHOLDER_NAME, NATIVE_DEPS_NAME),
-    )
-    runfiles = ctx.runfiles([module]).merge(ctx.attr.cc_library[0].default_runfiles)
     return [
-        DefaultInfo(runfiles = runfiles),
-        PyNativeLibrary(linking_context = ctx.attr.cc_library[0][CcInfo].linking_context),
+        PyNativeModule(
+            runfiles = ctx.attr.cc_library[DefaultInfo].default_runfiles,
+            cc_info = ctx.attr.cc_library[CcInfo],
+        ),
+        # Allow Python targets to depend on this.
+        PyInfo(transitive_sources = depset()),
     ]
 
 py_native_module = rule(
     implementation = _py_native_module_impl,
     fragments = ["cpp"],
     attrs = {
-        "cc_library": attr.label(cfg = _stop_propagation),
-        "_toplevel": attr.label(default = TOPLEVEL_FLAG),
+        "cc_library": attr.label(),
         "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
+    },
+)
+
+def _nativedeps_impl(ctx):
+    target_label = ctx.attr._actual.label
+    module = ctx.actions.declare_file("lib" + ctx.label.name + ".so")
+    link_with_placeholder(ctx = ctx, output = module, target_label = target_label)
+    runfiles = ctx.runfiles([module])
+    return [DefaultInfo(runfiles = runfiles)]
+
+nativedeps = rule(
+    implementation = _nativedeps_impl,
+    fragments = ["cpp"],
+    attrs = {
+        "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
+        "_actual": attr.label(default = ACTUAL_NATIVEDEPS_SETTING),
+    },
+)
+
+def _python_module_placeholder_aspect_impl(target, ctx):
+    if PyNativeModule in target:
+        module = ctx.actions.declare_file(target.label.name + ".so")
+        link_with_placeholder(ctx = ctx, output = module, target_label = NATIVEDEPS_TARGET)
+        return [
+            PyNativeDepset(
+                runfiles = ctx.runfiles([module]).merge(target[PyNativeModule].runfiles),
+                cc_infos = depset([target[PyNativeModule].cc_info]),
+            ),
+        ]
+    else:
+        return [
+            PyNativeDepset(
+                runfiles = _merge_runfiles(ctx.runfiles(), [
+                    dep[PyNativeDepset].runfiles for dep in ctx.rule.attr.deps
+                ]),
+                cc_infos = depset(transitive = [
+                    dep[PyNativeDepset].cc_infos for dep in ctx.rule.attr.deps
+                ]),
+            ),
+        ]
+
+python_module_placeholder_aspect = aspect(
+    implementation = _python_module_placeholder_aspect_impl,
+    fragments = ["cpp"],
+    attr_aspects = ["deps"],
+    attrs = {
+        "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
+    },
+)
+
+def _propagate_actual_impl(settings, attr):
+    return {ACTUAL_NATIVEDEPS_SETTING: attr.actual}
+
+_propagate_actual = transition(
+    implementation = _propagate_actual_impl,
+    inputs = [],
+    outputs = [ACTUAL_NATIVEDEPS_SETTING],
+)
+
+def _configure_nativedeps_impl(ctx):
+    return [DefaultInfo(runfiles = ctx.attr._nativedeps[0][DefaultInfo].default_runfiles)]
+
+configure_nativedeps = rule(
+    implementation = _configure_nativedeps_impl,
+    attrs = {
+        "actual": attr.label(),
+        "_nativedeps": attr.label(default = NATIVEDEPS_TARGET, cfg = _propagate_actual),
         "_whitelist_function_transition": attr.label(
             default = "@bazel_tools//tools/whitelists/function_transition_whitelist",
         ),
+    },
+)
+
+def _py_toplevel_target_impl(ctx):
+    cc_infos = depset(transitive = [dep[PyNativeDepset].cc_infos for dep in ctx.attr.deps])
+    cc_info = cc_common.merge_cc_infos(cc_infos = cc_infos.to_list())
+    nativedeps_lib = link_so(
+        ctx = ctx,
+        name = ctx.label.name,
+        linking_contexts = [cc_info.linking_context],
+        stamp = ctx.attr.stamp,
+    )
+    runfiles = _merge_runfiles(
+        ctx.runfiles(files = [nativedeps_lib]),
+        [dep[PyNativeDepset].runfiles for dep in ctx.attr.deps],
+    )
+    return [
+        DefaultInfo(runfiles = runfiles),
+        PyNativeDepsLib(dynamic_library = nativedeps_lib),
+    ]
+
+py_library_deps = rule(
+    implementation = _py_toplevel_target_impl,
+    fragments = ["cpp"],
+    attrs = {
+        "deps": attr.label_list(aspects = [python_module_placeholder_aspect]),
+        "stamp": attr.int(default = -1),
+        "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
     },
 )
