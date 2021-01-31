@@ -31,14 +31,13 @@ Note that since we're using transitions, py_binaries with native dependencies
 should be passed to genrules as exec_tools (rather than tools).
 """
 
-load(":cc_tools.bzl", "link_so", "link_with_placeholder")
+load(":cc_tools.bzl", "link_so", "link_with_placeholder", "compile")
 
 NATIVEDEPS_TARGET = Label("@rules_native_python//:nativedeps")
 ACTUAL_NATIVEDEPS_SETTING = "@rules_native_python//:actual_nativedeps"
 
-PyNativeModule = provider(fields = ["runfiles", "cc_info"])
+PyNativeModule = provider(fields = ["runfiles", "deps_cc_info", "srcs"])
 PyNativeDepset = provider(fields = ["runfiles", "cc_infos"])
-PyNativeDepsLib = provider(fields = ["dynamic_library"])
 
 def _merge_runfiles(runfiles, runfiles_list):
     for r in runfiles_list:
@@ -48,8 +47,9 @@ def _merge_runfiles(runfiles, runfiles_list):
 def _py_native_module_impl(ctx):
     return [
         PyNativeModule(
-            runfiles = ctx.attr.cc_library[DefaultInfo].default_runfiles,
-            cc_info = ctx.attr.cc_library[CcInfo],
+            runfiles = ctx.attr.deps_library[DefaultInfo].default_runfiles,
+            deps_cc_info = ctx.attr.deps_library[CcInfo],
+            srcs = depset(transitive = [src.files for src in ctx.attr.srcs]).to_list(),
         ),
         # Allow Python targets to depend on this.
         PyInfo(transitive_sources = depset()),
@@ -59,7 +59,9 @@ py_native_module = rule(
     implementation = _py_native_module_impl,
     fragments = ["cpp"],
     attrs = {
-        "cc_library": attr.label(),
+        "deps_library": attr.label(),
+        "module_library": attr.label(),
+        "srcs": attr.label_list(allow_files = True),
         "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
     },
 )
@@ -83,11 +85,17 @@ nativedeps = rule(
 def _python_module_placeholder_aspect_impl(target, ctx):
     if PyNativeModule in target:
         module = ctx.actions.declare_file(target.label.name + ".so")
-        link_with_placeholder(ctx = ctx, output = module, target_label = NATIVEDEPS_TARGET)
+        link_with_placeholder(
+            ctx = ctx,
+            output = module,
+            target_label = NATIVEDEPS_TARGET,
+            library_srcs = target[PyNativeModule].srcs,
+            cc_info = target[PyNativeModule].deps_cc_info,
+        )
         return [
             PyNativeDepset(
                 runfiles = ctx.runfiles([module]).merge(target[PyNativeModule].runfiles),
-                cc_infos = depset([target[PyNativeModule].cc_info]),
+                cc_infos = depset([target[PyNativeModule].deps_cc_info]),
             ),
         ]
     else:
@@ -142,15 +150,13 @@ def _py_toplevel_target_impl(ctx):
         name = ctx.label.name,
         linking_contexts = [cc_info.linking_context],
         stamp = ctx.attr.stamp,
+        force_alwayslink = True,
     )
     runfiles = _merge_runfiles(
         ctx.runfiles(files = [nativedeps_lib]),
         [dep[PyNativeDepset].runfiles for dep in ctx.attr.deps],
     )
-    return [
-        DefaultInfo(runfiles = runfiles),
-        PyNativeDepsLib(dynamic_library = nativedeps_lib),
-    ]
+    return [DefaultInfo(runfiles = runfiles)]
 
 py_library_deps = rule(
     implementation = _py_toplevel_target_impl,
