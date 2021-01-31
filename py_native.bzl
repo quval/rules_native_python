@@ -110,10 +110,7 @@ def _python_module_placeholder_aspect_impl(target, ctx):
             ctx = ctx,
             output = module,
             target_label = TEST_NATIVEDEPS_TARGET if ctx.rule.attr.testonly else NATIVEDEPS_TARGET,
-            library_linker_inputs = target[PyNativeModule].module_linker_inputs,
-            placeholder_linker_inputs = (
-                target[PyNativeModule].deps_linker_inputs +
-                target[PyNativeModule].indirect_deps_linker_inputs),
+            library_linker_inputs = target[PyNativeModuleInfo].module_linker_inputs,
         )
         return [
             PyNativeDepset(

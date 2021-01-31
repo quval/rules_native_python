@@ -55,7 +55,7 @@ def link_so(ctx, name, compilation_outputs = None, linker_inputs = [], force_alw
     )
     return linking_outputs.library_to_link.resolved_symlink_dynamic_library
 
-def link_with_placeholder(ctx, output, target_label, library_linker_inputs = [], placeholder_linker_inputs = []):
+def link_with_placeholder(ctx, output, target_label, library_linker_inputs = []):
     """Creates a shared library linked against a library that doesn't exist yet.
 
     This is useful for creating a module library that depending on the native
@@ -113,9 +113,7 @@ def link_with_placeholder(ctx, output, target_label, library_linker_inputs = [],
     ctx.actions.symlink(output = placeholder, target_file = link_so(
         ctx = ctx,
         name = "_%s__%s__%s__placeholder" % (tmpdir, target_path, target_name),
-        linker_inputs = placeholder_linker_inputs,
-        # This is just a placeholder, so let's be done with it quickly. Also,
-        # unless we link with a dynamically-linked placeholder, macOS will
+        # Unless we link with a dynamically-linked placeholder, macOS will
         # expect symbols to be present in the actual placeholder library, not
         # just available through it.
         link_deps_statically = False,
