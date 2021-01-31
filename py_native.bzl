@@ -36,8 +36,17 @@ load(":cc_tools.bzl", "link_so", "link_with_placeholder")
 NATIVEDEPS_TARGET = Label("@rules_native_python//:nativedeps")
 ACTUAL_NATIVEDEPS_SETTING = "@rules_native_python//:actual_nativedeps"
 
-PyNativeModule = provider(fields = ["runfiles", "deps_cc_info", "deps", "module_linking_contexts"])
-PyNativeDepset = provider(fields = ["runfiles", "cc_infos", "deps"])
+PyNativeModule = provider(fields = [
+    "runfiles",
+    "deps_linker_inputs",
+    "indirect_deps_linker_inputs",
+    "module_linker_inputs",
+])
+PyNativeDepset = provider(fields = [
+    "runfiles",
+    "deps_linker_inputs",
+    "indirect_deps_linker_inputs",
+])
 
 def _merge_runfiles(runfiles, runfiles_list):
     for r in runfiles_list:
@@ -45,17 +54,22 @@ def _merge_runfiles(runfiles, runfiles_list):
     return runfiles
 
 def _py_native_module_impl(ctx):
-    module_linking_contexts = [
-        linker_input
-        for linker_input in ctx.attr.module_library[CcInfo].linking_context.linker_inputs.to_list()
-        if linker_input.owner == ctx.attr.module_library.label
-    ]
+    deps_linker_inputs, indirect_deps_linker_inputs, module_linker_inputs = [], [], []
+    direct_deps = [target.label for target in ctx.attr.direct_deps]
+    linking_context = ctx.attr.cc_library[CcInfo].linking_context
+    for linker_input in linking_context.linker_inputs.to_list():
+        if linker_input.owner == ctx.attr.cc_library.label:
+            module_linker_inputs.append(linker_input)
+        elif linker_input.owner in direct_deps:
+            deps_linker_inputs.append(linker_input)
+        else:
+            indirect_deps_linker_inputs.append(linker_input)
     return [
         PyNativeModule(
-            runfiles = ctx.attr.deps_library[DefaultInfo].default_runfiles,
-            deps_cc_info = ctx.attr.deps_library[CcInfo],
-            module_linking_contexts = module_linking_contexts,
-            deps = ctx.attr.deps,
+            runfiles = ctx.attr.cc_library[DefaultInfo].default_runfiles,
+            deps_linker_inputs = deps_linker_inputs,
+            indirect_deps_linker_inputs = indirect_deps_linker_inputs,
+            module_linker_inputs = module_linker_inputs,
         ),
         # Allow Python targets to depend on this.
         PyInfo(transitive_sources = depset()),
@@ -65,9 +79,8 @@ py_native_module = rule(
     implementation = _py_native_module_impl,
     fragments = ["cpp"],
     attrs = {
-        "deps_library": attr.label(),
-        "module_library": attr.label(),
-        "deps": attr.label_list(providers = [CcInfo]),
+        "cc_library": attr.label(providers = [CcInfo]),
+        "direct_deps": attr.label_list(providers = [CcInfo]),
         "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
     },
 )
@@ -95,14 +108,19 @@ def _python_module_placeholder_aspect_impl(target, ctx):
             ctx = ctx,
             output = module,
             target_label = NATIVEDEPS_TARGET,
-            library_linking_contexts = target[PyNativeModule].module_linking_contexts,
-            cc_info = target[PyNativeModule].deps_cc_info,
+            library_linker_inputs = target[PyNativeModule].module_linker_inputs,
+            placeholder_linker_inputs = (
+                target[PyNativeModule].deps_linker_inputs +
+                target[PyNativeModule].indirect_deps_linker_inputs),
         )
         return [
             PyNativeDepset(
-                runfiles = ctx.runfiles([module]).merge(target[PyNativeModule].runfiles),
-                cc_infos = depset([target[PyNativeModule].deps_cc_info]),
-                deps = depset(target[PyNativeModule].deps),
+                runfiles = ctx.runfiles([module]).merge(
+                    target[PyNativeModule].runfiles),
+                deps_linker_inputs = depset(
+                    target[PyNativeModule].deps_linker_inputs),
+                indirect_deps_linker_inputs = depset(
+                    target[PyNativeModule].indirect_deps_linker_inputs),
             ),
         ]
     else:
@@ -111,11 +129,13 @@ def _python_module_placeholder_aspect_impl(target, ctx):
                 runfiles = _merge_runfiles(ctx.runfiles(), [
                     dep[PyNativeDepset].runfiles for dep in ctx.rule.attr.deps
                 ]),
-                cc_infos = depset(transitive = [
-                    dep[PyNativeDepset].cc_infos for dep in ctx.rule.attr.deps
+                deps_linker_inputs = depset(transitive = [
+                    dep[PyNativeDepset].deps_linker_inputs
+                    for dep in ctx.rule.attr.deps
                 ]),
-                deps = depset(transitive = [
-                    dep[PyNativeDepset].deps for dep in ctx.rule.attr.deps
+                indirect_deps_linker_inputs = depset(transitive = [
+                    dep[PyNativeDepset].indirect_deps_linker_inputs
+                    for dep in ctx.rule.attr.deps
                 ]),
             ),
         ]
@@ -153,32 +173,17 @@ configure_nativedeps = rule(
 )
 
 def _py_toplevel_target_impl(ctx):
-    cc_infos = depset(transitive = [
-        dep[PyNativeDepset].cc_infos for dep in ctx.attr.deps
-    ])
-    cc_info = cc_common.merge_cc_infos(cc_infos = cc_infos.to_list())
-
     # Only force-alwayslink those libraries that are direct dependencies of
     # native modules.
-    direct_deps = [target.label for target in depset(transitive = [
-        dep[PyNativeDepset].deps for dep in ctx.attr.deps
-    ]).to_list()]
-    direct_linking_contexts, indirect_linking_contexts = [], []
-    for linker_inputs in cc_info.linking_context.linker_inputs.to_list():
-        if linker_inputs.owner in direct_deps:
-            direct_linking_contexts.append(linker_inputs)
-        else:
-            indirect_linking_contexts.append(linker_inputs)
-
     nativedeps_lib = link_so(
         ctx = ctx,
         name = ctx.label.name,
-        linking_contexts = [cc_common.create_linking_context(
-            linker_inputs = depset(indirect_linking_contexts),
-        )],
-        force_alwayslink_contexts = [cc_common.create_linking_context(
-            linker_inputs = depset(direct_linking_contexts),
-        )],
+        linker_inputs = depset(transitive = [
+            dep[PyNativeDepset].indirect_deps_linker_inputs for dep in ctx.attr.deps
+        ]).to_list(),
+        force_alwayslink_inputs = depset(transitive = [
+            dep[PyNativeDepset].deps_linker_inputs for dep in ctx.attr.deps
+        ]).to_list(),
         stamp = ctx.attr.stamp,
     )
     runfiles = _merge_runfiles(

@@ -10,32 +10,21 @@ load("@rules_python//python:defs.bzl",
     _py_library = "py_library",
     _py_test = "py_test")
 
-def py_native_module(name, srcs = None, deps = None, testonly = None, visibility = None, **kwargs):
+def py_native_module(name, deps = None, testonly = None, visibility = None, **kwargs):
     """A wrapper around cc_library.
 
-    py_native_library targets may be passed as native_deps to the py_* wrappers.
-
-    Unlike regular cc_libraries, doesn't link in cc_libraries provided in srcs.
-    Please use deps instead.
+    py_native_library targets may be passed as deps to the py_* wrappers.
     """
     cc_library(
-        name = "_%s_nativedeps" % name,
+        name = "_%s" % name,
         deps = deps,
-        testonly = testonly,
-        **kwargs,
-    )
-    cc_library(
-        name = "_%s_module" % name,
-        srcs = srcs,
-        deps = [":_%s_nativedeps" % name],
         testonly = testonly,
         **kwargs,
     )
     _py_native_module(
         name = name,
-        deps = deps,
-        deps_library = ":_%s_nativedeps" % name,
-        module_library = ":_%s_module" % name,
+        direct_deps = deps,
+        cc_library = ":_%s" % name,
         testonly = testonly,
         visibility = visibility,
     )

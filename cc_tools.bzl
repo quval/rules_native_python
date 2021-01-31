@@ -13,42 +13,41 @@ def _cc_toolchain_info(ctx):
     )
     return cc_toolchain, feature_configuration
 
-def _force_alwayslink(ctx, linking_contexts):
+def _force_alwayslink(ctx, linker_inputs):
     cc_toolchain, feature_configuration = _cc_toolchain_info(ctx)
     # I really wish there were an easier way of doing this.
     return [
-        cc_common.create_linking_context(linker_inputs = depset([
-            cc_common.create_linker_input(
-                owner = linker_input.owner,
-                libraries = depset([
-                    cc_common.create_library_to_link(
-                        actions = ctx.actions,
-                        feature_configuration = feature_configuration,
-                        cc_toolchain = cc_toolchain,
-                        pic_static_library = library.pic_static_library,
-                        alwayslink = True,
-                    )
-                    for library in linker_input.libraries
-                ]),
-                user_link_flags = depset(linker_input.user_link_flags),
-                additional_inputs = depset(linker_input.additional_inputs),
-            )
-            for linker_input in linking_context.linker_inputs.to_list()
-        ]))
-        for linking_context in linking_contexts
+        cc_common.create_linker_input(
+            owner = linker_input.owner,
+            libraries = depset([
+                cc_common.create_library_to_link(
+                    actions = ctx.actions,
+                    feature_configuration = feature_configuration,
+                    cc_toolchain = cc_toolchain,
+                    pic_static_library = library.pic_static_library,
+                    alwayslink = True,
+                )
+                for library in linker_input.libraries
+            ]),
+            user_link_flags = depset(linker_input.user_link_flags),
+            additional_inputs = depset(linker_input.additional_inputs),
+        )
+        for linker_input in linker_inputs
     ]
 
-def link_so(ctx, name, compilation_outputs = None, linking_contexts = [], force_alwayslink_contexts = [], link_deps_statically = True, **kwargs):
+def link_so(ctx, name, compilation_outputs = None, linker_inputs = [], force_alwayslink_inputs = [], link_deps_statically = True, **kwargs):
     cc_toolchain, feature_configuration = _cc_toolchain_info(ctx)
-    if force_alwayslink_contexts and not link_deps_statically:
+    if force_alwayslink_inputs and not link_deps_statically:
         fail("force_alwayslink can only handle static libraries.")
     linking_outputs = cc_common.link(
         actions = ctx.actions,
         feature_configuration = feature_configuration,
         cc_toolchain = cc_toolchain,
         compilation_outputs = compilation_outputs,
-        linking_contexts = linking_contexts + _force_alwayslink(
-            ctx, force_alwayslink_contexts),
+        linking_contexts = [cc_common.create_linking_context(
+            linker_inputs = depset(
+                linker_inputs + _force_alwayslink(ctx, force_alwayslink_inputs)),
+        )],
         name = name,
         output_type = "dynamic_library",
         link_deps_statically = link_deps_statically,
@@ -56,7 +55,7 @@ def link_so(ctx, name, compilation_outputs = None, linking_contexts = [], force_
     )
     return linking_outputs.library_to_link.resolved_symlink_dynamic_library
 
-def link_with_placeholder(ctx, output, target_label, library_linking_contexts = None, cc_info = None):
+def link_with_placeholder(ctx, output, target_label, library_linker_inputs = [], placeholder_linker_inputs = []):
     """Creates a shared library linked against a library that doesn't exist yet.
 
     This is useful for creating a module library that depending on the native
@@ -88,12 +87,10 @@ def link_with_placeholder(ctx, output, target_label, library_linking_contexts = 
             ctx.actions.symlink(output = output, target_file = link_so(
                 ctx = ctx,
                 name = ctx.label.name,
-                linking_contexts = [cc_common.create_linking_context(
-                    linker_inputs = depset([cc_common.create_linker_input(
-                        owner = ctx.label,
-                        libraries = depset([library_to_link(ctx, placeholder)]),
-                        user_link_flags = depset(["-Wl,-rpath,$ORIGIN/%s" % rpath]),
-                    )]),
+                linker_inputs = [cc_common.create_linker_input(
+                    owner = ctx.label,
+                    libraries = depset([library_to_link(ctx, placeholder)]),
+                    user_link_flags = depset(["-Wl,-rpath,$ORIGIN/%s" % rpath]),
                 )],
                 link_deps_statically = False,
             ))
@@ -116,7 +113,7 @@ def link_with_placeholder(ctx, output, target_label, library_linking_contexts = 
     ctx.actions.symlink(output = placeholder, target_file = link_so(
         ctx = ctx,
         name = "_%s__%s__%s__placeholder" % (tmpdir, target_path, target_name),
-        linking_contexts = [cc_info.linking_context] if cc_info else [],
+        linker_inputs = placeholder_linker_inputs,
         # This is just a placeholder, so let's be done with it quickly. Also,
         # unless we link with a dynamically-linked placeholder, macOS will
         # expect symbols to be present in the actual placeholder library, not
@@ -130,13 +127,11 @@ def link_with_placeholder(ctx, output, target_label, library_linking_contexts = 
         -1 if output.owner.workspace_name else 1)
     rpath = "../" * levels_up + target_path
 
-    library_pic_objects = []
-    if library_linking_contexts:
-        library_pic_objects = depset(transitive = [
-            depset(library.pic_objects)
-            for linking_context in library_linking_contexts
-            for library in linking_context.libraries
-        ]).to_list()
+    library_pic_objects = depset(transitive = [
+        depset(library.pic_objects)
+        for library_linker_input in library_linker_inputs
+        for library in library_linker_input.libraries
+    ]).to_list()
 
     # We invoke the linker directly (rather than through cc_common.link) so we
     # have perfect control over the paths.
