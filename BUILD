@@ -10,3 +10,9 @@ nativedeps(
     name = "nativedeps",
     visibility = ["//visibility:public"],
 )
+
+nativedeps(
+    name = "test_nativedeps",
+    testonly = True,
+    visibility = ["//visibility:public"],
+)

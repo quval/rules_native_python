@@ -34,6 +34,7 @@ should be passed to genrules as exec_tools (rather than tools).
 load(":cc_tools.bzl", "link_so", "link_with_placeholder")
 
 NATIVEDEPS_TARGET = Label("@rules_native_python//:nativedeps")
+TEST_NATIVEDEPS_TARGET = Label("@rules_native_python//:test_nativedeps")
 ACTUAL_NATIVEDEPS_SETTING = "@rules_native_python//:actual_nativedeps"
 
 PyNativeModule = provider(fields = [
@@ -87,7 +88,7 @@ py_native_module = rule(
 
 def _nativedeps_impl(ctx):
     target_label = ctx.attr._actual.label
-    module = ctx.actions.declare_file("lib" + ctx.label.name + ".so")
+    module = ctx.actions.declare_file("lib" + ctx.attr._library_name + ".so")
     link_with_placeholder(ctx = ctx, output = module, target_label = target_label)
     runfiles = ctx.runfiles([module])
     return [DefaultInfo(runfiles = runfiles)]
@@ -96,8 +97,9 @@ nativedeps = rule(
     implementation = _nativedeps_impl,
     fragments = ["cpp"],
     attrs = {
-        "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
         "_actual": attr.label(default = ACTUAL_NATIVEDEPS_SETTING),
+        "_library_name": attr.string(default = "nativedeps"),
+        "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
     },
 )
 
@@ -107,7 +109,7 @@ def _python_module_placeholder_aspect_impl(target, ctx):
         link_with_placeholder(
             ctx = ctx,
             output = module,
-            target_label = NATIVEDEPS_TARGET,
+            target_label = TEST_NATIVEDEPS_TARGET if ctx.rule.attr.testonly else NATIVEDEPS_TARGET,
             library_linker_inputs = target[PyNativeModule].module_linker_inputs,
             placeholder_linker_inputs = (
                 target[PyNativeModule].deps_linker_inputs +
@@ -161,16 +163,20 @@ _propagate_actual = transition(
 def _configure_nativedeps_impl(ctx):
     return [DefaultInfo(runfiles = ctx.attr._nativedeps[0][DefaultInfo].default_runfiles)]
 
-configure_nativedeps = rule(
-    implementation = _configure_nativedeps_impl,
-    attrs = {
-        "actual": attr.label(),
-        "_nativedeps": attr.label(default = NATIVEDEPS_TARGET, cfg = _propagate_actual),
-        "_whitelist_function_transition": attr.label(
-            default = "@bazel_tools//tools/whitelists/function_transition_whitelist",
-        ),
-    },
-)
+def _make_configure_nativedeps_rule(nativedeps_target):
+    return rule(
+        implementation = _configure_nativedeps_impl,
+        attrs = {
+            "actual": attr.label(),
+            "_nativedeps": attr.label(default = nativedeps_target, cfg = _propagate_actual),
+            "_whitelist_function_transition": attr.label(
+                default = "@bazel_tools//tools/whitelists/function_transition_whitelist",
+            ),
+        },
+    )
+
+configure_nativedeps = _make_configure_nativedeps_rule(NATIVEDEPS_TARGET)
+configure_test_nativedeps = _make_configure_nativedeps_rule(TEST_NATIVEDEPS_TARGET)
 
 def _py_toplevel_target_impl(ctx):
     # Only force-alwayslink those libraries that are direct dependencies of

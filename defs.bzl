@@ -2,6 +2,7 @@
 
 load(":py_native.bzl",
     _configure_nativedeps = "configure_nativedeps",
+    _configure_test_nativedeps = "configure_test_nativedeps",
     _py_library_deps = "py_library_deps",
     _py_native_module = "py_native_module")
 load("@rules_cc//cc:defs.bzl", "cc_library")
@@ -29,15 +30,17 @@ def py_native_module(name, deps = None, testonly = None, visibility = None, **kw
         visibility = visibility,
     )
 
-def _py_toplevel_target(py_rule, name, data = [], deps = [], stamp = None, **kwargs):
+def _py_toplevel_target(py_rule, name, data = [], deps = [], testonly = None, stamp = None, **kwargs):
     _py_library_deps(
         name = "_%s_nativedeps" % name,
         stamp = stamp,
         deps = deps,
+        testonly = testonly,
     )
-    _configure_nativedeps(
+    (_configure_test_nativedeps if testonly else _configure_nativedeps)(
         name = "_%s_configured_nativedeps" % name,
         actual = ":_%s_nativedeps" % name,
+        testonly = testonly,
     )
     py_rule(
         name = name,
@@ -56,6 +59,6 @@ def py_binary(*args, **kwargs):
 
 def py_test(*args, **kwargs):
     """A wrapper around py_test, adding native_deps support."""
-    _py_toplevel_target(_py_test, *args, **kwargs)
+    _py_toplevel_target(_py_test, testonly = True, *args, **kwargs)
 
 py_library = _py_library
