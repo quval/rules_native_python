@@ -1,8 +1,8 @@
 """"Alternative rules for Python and for Python native libraries."""
 
-load(":py_native.bzl", "configure_nativedeps", "configure_test_nativedeps", "py_library_deps", _py_native_module = "py_native_module")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", _py_binary = "py_binary", _py_library = "py_library", _py_test = "py_test")
+load(":py_native.bzl", "configure_nativedeps", "configure_test_nativedeps", "py_library_deps", _py_native_module = "py_native_module")
 
 def py_native_module(name, deps = None, testonly = None, visibility = None, **kwargs):
     """A wrapper around cc_library.
@@ -13,7 +13,7 @@ def py_native_module(name, deps = None, testonly = None, visibility = None, **kw
         name = "_%s" % name,
         deps = deps,
         testonly = testonly,
-        **kwargs,
+        **kwargs
     )
     _py_native_module(
         name = name,
@@ -43,7 +43,7 @@ def _py_toplevel_target(py_rule, name, data = [], deps = [], testonly = None, st
         ],
         deps = deps,
         stamp = stamp,
-        **kwargs,
+        **kwargs
     )
 
 def py_binary(*args, **kwargs):

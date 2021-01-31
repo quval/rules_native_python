@@ -37,13 +37,13 @@ NATIVEDEPS_TARGET = Label("@rules_native_python//:nativedeps")
 TEST_NATIVEDEPS_TARGET = Label("@rules_native_python//:test_nativedeps")
 ACTUAL_NATIVEDEPS_SETTING = "@rules_native_python//:actual_nativedeps"
 
-PyNativeModule = provider(fields = [
+PyNativeModuleInfo = provider(fields = [
     "runfiles",
     "deps_linker_inputs",
     "indirect_deps_linker_inputs",
     "module_linker_inputs",
 ])
-PyNativeDepset = provider(fields = [
+PyNativeDepsetInfo = provider(fields = [
     "runfiles",
     "deps_linker_inputs",
     "indirect_deps_linker_inputs",
@@ -66,7 +66,7 @@ def _py_native_module_impl(ctx):
         else:
             indirect_deps_linker_inputs.append(linker_input)
     return [
-        PyNativeModule(
+        PyNativeModuleInfo(
             runfiles = ctx.attr.cc_library[DefaultInfo].default_runfiles,
             deps_linker_inputs = deps_linker_inputs,
             indirect_deps_linker_inputs = indirect_deps_linker_inputs,
@@ -104,7 +104,7 @@ nativedeps = rule(
 )
 
 def _python_module_placeholder_aspect_impl(target, ctx):
-    if PyNativeModule in target:
+    if PyNativeModuleInfo in target:
         module = ctx.actions.declare_file(target.label.name + ".so")
         link_with_placeholder(
             ctx = ctx,
@@ -113,27 +113,31 @@ def _python_module_placeholder_aspect_impl(target, ctx):
             library_linker_inputs = target[PyNativeModuleInfo].module_linker_inputs,
         )
         return [
-            PyNativeDepset(
+            PyNativeDepsetInfo(
                 runfiles = ctx.runfiles([module]).merge(
-                    target[PyNativeModule].runfiles),
+                    target[PyNativeModuleInfo].runfiles,
+                ),
                 deps_linker_inputs = depset(
-                    target[PyNativeModule].deps_linker_inputs),
+                    target[PyNativeModuleInfo].deps_linker_inputs,
+                ),
                 indirect_deps_linker_inputs = depset(
-                    target[PyNativeModule].indirect_deps_linker_inputs),
+                    target[PyNativeModuleInfo].indirect_deps_linker_inputs,
+                ),
             ),
         ]
     else:
         return [
-            PyNativeDepset(
+            PyNativeDepsetInfo(
                 runfiles = _merge_runfiles(ctx.runfiles(), [
-                    dep[PyNativeDepset].runfiles for dep in ctx.rule.attr.deps
+                    dep[PyNativeDepsetInfo].runfiles
+                    for dep in ctx.rule.attr.deps
                 ]),
                 deps_linker_inputs = depset(transitive = [
-                    dep[PyNativeDepset].deps_linker_inputs
+                    dep[PyNativeDepsetInfo].deps_linker_inputs
                     for dep in ctx.rule.attr.deps
                 ]),
                 indirect_deps_linker_inputs = depset(transitive = [
-                    dep[PyNativeDepset].indirect_deps_linker_inputs
+                    dep[PyNativeDepsetInfo].indirect_deps_linker_inputs
                     for dep in ctx.rule.attr.deps
                 ]),
             ),
@@ -182,16 +186,19 @@ def _py_toplevel_target_impl(ctx):
         ctx = ctx,
         name = ctx.label.name,
         linker_inputs = depset(transitive = [
-            dep[PyNativeDepset].indirect_deps_linker_inputs for dep in ctx.attr.deps
+            dep[PyNativeDepsetInfo].indirect_deps_linker_inputs
+            for dep in ctx.attr.deps
         ]).to_list(),
         force_alwayslink_inputs = depset(transitive = [
-            dep[PyNativeDepset].deps_linker_inputs for dep in ctx.attr.deps
+            dep[PyNativeDepsetInfo].deps_linker_inputs
+            for dep in ctx.attr.deps
         ]).to_list(),
         stamp = ctx.attr.stamp,
+        link_deps_statically = True,
     )
     runfiles = _merge_runfiles(
         ctx.runfiles(files = [nativedeps_lib]),
-        [dep[PyNativeDepset].runfiles for dep in ctx.attr.deps],
+        [dep[PyNativeDepsetInfo].runfiles for dep in ctx.attr.deps],
     )
     return [DefaultInfo(runfiles = runfiles)]
 
