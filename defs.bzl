@@ -10,24 +10,32 @@ load("@rules_python//python:defs.bzl",
     _py_library = "py_library",
     _py_test = "py_test")
 
-def py_native_module(name, srcs = None, copts = None, deps = None, testonly = None, visibility = None, **kwargs):
+def py_native_module(name, srcs = None, deps = None, testonly = None, visibility = None, **kwargs):
     """A wrapper around cc_library.
 
     py_native_library targets may be passed as native_deps to the py_* wrappers.
+
+    Unlike regular cc_libraries, doesn't link in cc_libraries provided in srcs.
+    Please use deps instead.
     """
     cc_library(
         name = "_%s_nativedeps" % name,
-        copts = copts,
         deps = deps,
+        testonly = testonly,
+        **kwargs,
+    )
+    cc_library(
+        name = "_%s_module" % name,
+        srcs = srcs,
+        deps = [":_%s_nativedeps" % name],
         testonly = testonly,
         **kwargs,
     )
     _py_native_module(
         name = name,
-        copts = copts,
-        srcs = srcs,
         deps = deps,
-        deps_library = "_%s_nativedeps" % name,
+        deps_library = ":_%s_nativedeps" % name,
+        module_library = ":_%s_module" % name,
         testonly = testonly,
         visibility = visibility,
     )
@@ -40,13 +48,13 @@ def _py_toplevel_target(py_rule, name, data = [], deps = [], stamp = None, **kwa
     )
     _configure_nativedeps(
         name = "_%s_configured_nativedeps" % name,
-        actual = "_%s_nativedeps" % name,
+        actual = ":_%s_nativedeps" % name,
     )
     py_rule(
         name = name,
         data = data + [
-            "_%s_nativedeps" % name,
-            "_%s_configured_nativedeps" % name,
+            ":_%s_nativedeps" % name,
+            ":_%s_configured_nativedeps" % name,
         ],
         deps = deps,
         stamp = stamp,

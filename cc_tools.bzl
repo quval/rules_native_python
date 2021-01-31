@@ -13,19 +13,6 @@ def _cc_toolchain_info(ctx):
     )
     return cc_toolchain, feature_configuration
 
-def compile(ctx, name, srcs, compilation_contexts = [], **kwargs):
-    cc_toolchain, feature_configuration = _cc_toolchain_info(ctx)
-    _, compilation_outputs = cc_common.compile(
-        actions = ctx.actions,
-        feature_configuration = feature_configuration,
-        cc_toolchain = cc_toolchain,
-        name = name,
-        srcs = srcs,
-        compilation_contexts = compilation_contexts,
-        **kwargs,
-    )
-    return compilation_outputs
-
 def _force_alwayslink(ctx, linking_contexts):
     cc_toolchain, feature_configuration = _cc_toolchain_info(ctx)
     # I really wish there were an easier way of doing this.
@@ -69,7 +56,7 @@ def link_so(ctx, name, compilation_outputs = None, linking_contexts = [], force_
     )
     return linking_outputs.library_to_link.resolved_symlink_dynamic_library
 
-def link_with_placeholder(ctx, output, target_label, library_srcs = None, library_copts = [], cc_info = None):
+def link_with_placeholder(ctx, output, target_label, library_linking_contexts = None, cc_info = None):
     """Creates a shared library linked against a library that doesn't exist yet.
 
     This is useful for creating a module library that depending on the native
@@ -124,21 +111,6 @@ def link_with_placeholder(ctx, output, target_label, library_srcs = None, librar
     tmpdir = "_%s" % ctx.label.name
 
     # Compile the placeholder itself.
-    library_compilation_output = None
-    if cc_info:
-        library_compilation_output = compile(
-            ctx = ctx,
-            name = "_%s__%s__%s" % (tmpdir, target_path, target_name),
-            srcs = library_srcs,
-            compilation_contexts = [cc_info.compilation_context],
-            user_compile_flags = library_copts,
-        )
-    else:
-        library_compilation_output = compile(
-            ctx = ctx,
-            name = "empty",
-            srcs = [],
-        )
     placeholder = ctx.actions.declare_file(
         "%s/%s/lib%s.so" % (tmpdir, target_path, target_name))
     ctx.actions.symlink(output = placeholder, target_file = link_so(
@@ -157,6 +129,14 @@ def link_with_placeholder(ctx, output, target_label, library_srcs = None, librar
     levels_up = output.short_path.count("/") + (
         -1 if output.owner.workspace_name else 1)
     rpath = "../" * levels_up + target_path
+
+    library_pic_objects = []
+    if library_linking_contexts:
+        library_pic_objects = depset(transitive = [
+            depset(library.pic_objects)
+            for linking_context in library_linking_contexts
+            for library in linking_context.libraries
+        ]).to_list()
 
     # We invoke the linker directly (rather than through cc_common.link) so we
     # have perfect control over the paths.
@@ -178,7 +158,7 @@ def link_with_placeholder(ctx, output, target_label, library_srcs = None, librar
                 "@loader_path" if cc_toolchain.cpu == "darwin" else r"\$ORIGIN",
                 rpath
             ),
-        ] + [obj.path for obj in library_compilation_output.pic_objects],
+        ] + [obj.path for obj in library_pic_objects],
     )
     linker_args = cc_common.get_memory_inefficient_command_line(
         feature_configuration = feature_configuration,
@@ -189,7 +169,7 @@ def link_with_placeholder(ctx, output, target_label, library_srcs = None, librar
         mnemonic = "CcLinkWithPlaceholder",
         progress_message = "Linking %s with placeholder for %s/lib%s.so" % (
             output.short_path, target_path, target_name),
-        inputs = [placeholder] + library_compilation_output.pic_objects,
+        inputs = [placeholder] + library_pic_objects,
         outputs = [tmp_output],
         tools = cc_toolchain.all_files,
         command = " ".join([linker] + linker_args),
