@@ -36,7 +36,7 @@ load(":cc_tools.bzl", "link_so", "link_with_placeholder")
 NATIVEDEPS_TARGET = Label("@rules_native_python//:nativedeps")
 ACTUAL_NATIVEDEPS_SETTING = "@rules_native_python//:actual_nativedeps"
 
-PyNativeModule = provider(fields = ["runfiles", "deps_cc_info", "srcs", "deps"])
+PyNativeModule = provider(fields = ["runfiles", "deps_cc_info", "copts", "srcs", "deps"])
 PyNativeDepset = provider(fields = ["runfiles", "cc_infos", "deps"])
 
 def _merge_runfiles(runfiles, runfiles_list):
@@ -45,10 +45,12 @@ def _merge_runfiles(runfiles, runfiles_list):
     return runfiles
 
 def _py_native_module_impl(ctx):
+    cc_info = ctx.attr.deps_library[CcInfo]
     return [
         PyNativeModule(
             runfiles = ctx.attr.deps_library[DefaultInfo].default_runfiles,
-            deps_cc_info = ctx.attr.deps_library[CcInfo],
+            deps_cc_info = cc_info,
+            copts = ctx.attr.copts,
             srcs = depset(transitive = [src.files for src in ctx.attr.srcs]).to_list(),
             deps = ctx.attr.deps,
         ),
@@ -61,6 +63,7 @@ py_native_module = rule(
     fragments = ["cpp"],
     attrs = {
         "deps_library": attr.label(),
+        "copts": attr.string_list(),
         "srcs": attr.label_list(allow_files = True),
         "deps": attr.label_list(providers = [CcInfo]),
         "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
@@ -91,6 +94,7 @@ def _python_module_placeholder_aspect_impl(target, ctx):
             output = module,
             target_label = NATIVEDEPS_TARGET,
             library_srcs = target[PyNativeModule].srcs,
+            library_copts = target[PyNativeModule].copts,
             cc_info = target[PyNativeModule].deps_cc_info,
         )
         return [

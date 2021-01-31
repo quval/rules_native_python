@@ -13,7 +13,7 @@ def _cc_toolchain_info(ctx):
     )
     return cc_toolchain, feature_configuration
 
-def compile(ctx, name, srcs, compilation_contexts = []):
+def compile(ctx, name, srcs, compilation_contexts = [], **kwargs):
     cc_toolchain, feature_configuration = _cc_toolchain_info(ctx)
     _, compilation_outputs = cc_common.compile(
         actions = ctx.actions,
@@ -22,6 +22,7 @@ def compile(ctx, name, srcs, compilation_contexts = []):
         name = name,
         srcs = srcs,
         compilation_contexts = compilation_contexts,
+        **kwargs,
     )
     return compilation_outputs
 
@@ -68,7 +69,7 @@ def link_so(ctx, name, compilation_outputs = None, linking_contexts = [], force_
     )
     return linking_outputs.library_to_link.resolved_symlink_dynamic_library
 
-def link_with_placeholder(ctx, output, target_label, library_srcs = None, cc_info = None):
+def link_with_placeholder(ctx, output, target_label, library_srcs = None, library_copts = [], cc_info = None):
     """Creates a shared library linked against a library that doesn't exist yet.
 
     This is useful for creating a module library that depending on the native
@@ -130,6 +131,7 @@ def link_with_placeholder(ctx, output, target_label, library_srcs = None, cc_inf
             name = "_%s__%s__%s" % (tmpdir, target_path, target_name),
             srcs = library_srcs,
             compilation_contexts = [cc_info.compilation_context],
+            user_compile_flags = library_copts,
         )
     else:
         library_compilation_output = compile(
