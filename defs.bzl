@@ -24,6 +24,7 @@ def py_native_module(name, srcs = None, deps = None, testonly = None, visibility
     _py_native_module(
         name = name,
         srcs = srcs,
+        deps = deps,
         deps_library = "_%s_nativedeps" % name,
         testonly = testonly,
         visibility = visibility,

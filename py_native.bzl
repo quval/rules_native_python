@@ -31,13 +31,13 @@ Note that since we're using transitions, py_binaries with native dependencies
 should be passed to genrules as exec_tools (rather than tools).
 """
 
-load(":cc_tools.bzl", "link_so", "link_with_placeholder", "compile")
+load(":cc_tools.bzl", "link_so", "link_with_placeholder")
 
 NATIVEDEPS_TARGET = Label("@rules_native_python//:nativedeps")
 ACTUAL_NATIVEDEPS_SETTING = "@rules_native_python//:actual_nativedeps"
 
-PyNativeModule = provider(fields = ["runfiles", "deps_cc_info", "srcs"])
-PyNativeDepset = provider(fields = ["runfiles", "cc_infos"])
+PyNativeModule = provider(fields = ["runfiles", "deps_cc_info", "srcs", "deps"])
+PyNativeDepset = provider(fields = ["runfiles", "cc_infos", "deps"])
 
 def _merge_runfiles(runfiles, runfiles_list):
     for r in runfiles_list:
@@ -50,6 +50,7 @@ def _py_native_module_impl(ctx):
             runfiles = ctx.attr.deps_library[DefaultInfo].default_runfiles,
             deps_cc_info = ctx.attr.deps_library[CcInfo],
             srcs = depset(transitive = [src.files for src in ctx.attr.srcs]).to_list(),
+            deps = ctx.attr.deps,
         ),
         # Allow Python targets to depend on this.
         PyInfo(transitive_sources = depset()),
@@ -60,8 +61,8 @@ py_native_module = rule(
     fragments = ["cpp"],
     attrs = {
         "deps_library": attr.label(),
-        "module_library": attr.label(),
         "srcs": attr.label_list(allow_files = True),
+        "deps": attr.label_list(providers = [CcInfo]),
         "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
     },
 )
@@ -96,6 +97,7 @@ def _python_module_placeholder_aspect_impl(target, ctx):
             PyNativeDepset(
                 runfiles = ctx.runfiles([module]).merge(target[PyNativeModule].runfiles),
                 cc_infos = depset([target[PyNativeModule].deps_cc_info]),
+                deps = depset(target[PyNativeModule].deps),
             ),
         ]
     else:
@@ -106,6 +108,9 @@ def _python_module_placeholder_aspect_impl(target, ctx):
                 ]),
                 cc_infos = depset(transitive = [
                     dep[PyNativeDepset].cc_infos for dep in ctx.rule.attr.deps
+                ]),
+                deps = depset(transitive = [
+                    dep[PyNativeDepset].deps for dep in ctx.rule.attr.deps
                 ]),
             ),
         ]
@@ -143,14 +148,33 @@ configure_nativedeps = rule(
 )
 
 def _py_toplevel_target_impl(ctx):
-    cc_infos = depset(transitive = [dep[PyNativeDepset].cc_infos for dep in ctx.attr.deps])
+    cc_infos = depset(transitive = [
+        dep[PyNativeDepset].cc_infos for dep in ctx.attr.deps
+    ])
     cc_info = cc_common.merge_cc_infos(cc_infos = cc_infos.to_list())
+
+    # Only force-alwayslink those libraries that are direct dependencies of
+    # native modules.
+    direct_deps = [target.label for target in depset(transitive = [
+        dep[PyNativeDepset].deps for dep in ctx.attr.deps
+    ]).to_list()]
+    direct_linking_contexts, indirect_linking_contexts = [], []
+    for linker_inputs in cc_info.linking_context.linker_inputs.to_list():
+        if linker_inputs.owner in direct_deps:
+            direct_linking_contexts.append(linker_inputs)
+        else:
+            indirect_linking_contexts.append(linker_inputs)
+
     nativedeps_lib = link_so(
         ctx = ctx,
         name = ctx.label.name,
-        linking_contexts = [cc_info.linking_context],
+        linking_contexts = [cc_common.create_linking_context(
+            linker_inputs = depset(indirect_linking_contexts),
+        )],
+        force_alwayslink_contexts = [cc_common.create_linking_context(
+            linker_inputs = depset(direct_linking_contexts),
+        )],
         stamp = ctx.attr.stamp,
-        force_alwayslink = True,
     )
     runfiles = _merge_runfiles(
         ctx.runfiles(files = [nativedeps_lib]),

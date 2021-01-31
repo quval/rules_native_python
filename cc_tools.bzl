@@ -50,17 +50,17 @@ def _force_alwayslink(ctx, linking_contexts):
         for linking_context in linking_contexts
     ]
 
-def link_so(ctx, name, compilation_outputs = None, linking_contexts = [], link_deps_statically = True, force_alwayslink = False, **kwargs):
+def link_so(ctx, name, compilation_outputs = None, linking_contexts = [], force_alwayslink_contexts = [], link_deps_statically = True, **kwargs):
     cc_toolchain, feature_configuration = _cc_toolchain_info(ctx)
-    if force_alwayslink and not link_deps_statically:
+    if force_alwayslink_contexts and not link_deps_statically:
         fail("force_alwayslink can only handle static libraries.")
     linking_outputs = cc_common.link(
         actions = ctx.actions,
         feature_configuration = feature_configuration,
         cc_toolchain = cc_toolchain,
         compilation_outputs = compilation_outputs,
-        linking_contexts = (_force_alwayslink(ctx, linking_contexts)
-                            if force_alwayslink else linking_contexts),
+        linking_contexts = linking_contexts + _force_alwayslink(
+            ctx, force_alwayslink_contexts),
         name = name,
         output_type = "dynamic_library",
         link_deps_statically = link_deps_statically,
