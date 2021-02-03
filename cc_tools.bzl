@@ -13,7 +13,7 @@ def _cc_toolchain_info(ctx):
     )
     return cc_toolchain, feature_configuration
 
-def _force_alwayslink(ctx, linker_inputs):
+def _apply_alwayslink(ctx, linker_inputs, alwayslink_owners):
     cc_toolchain, feature_configuration = _cc_toolchain_info(ctx)
 
     # I really wish there were an easier way of doing this.
@@ -25,6 +25,7 @@ def _force_alwayslink(ctx, linker_inputs):
                     actions = ctx.actions,
                     feature_configuration = feature_configuration,
                     cc_toolchain = cc_toolchain,
+                    static_library = library.static_library,
                     pic_static_library = library.pic_static_library,
                     alwayslink = True,
                 )
@@ -32,11 +33,11 @@ def _force_alwayslink(ctx, linker_inputs):
             ]),
             user_link_flags = depset(linker_input.user_link_flags),
             additional_inputs = depset(linker_input.additional_inputs),
-        )
+        ) if linker_input.owner in alwayslink_owners else linker_input
         for linker_input in linker_inputs
     ]
 
-def link_so(ctx, name, link_deps_statically, linker_inputs = [], force_alwayslink_inputs = [], **kwargs):
+def link_so(ctx, name, link_deps_statically, linker_inputs = [], alwayslink_owners = [], **kwargs):
     """Links the given LinkerInput objects into a shared library.
 
     Args:
@@ -46,24 +47,24 @@ def link_so(ctx, name, link_deps_statically, linker_inputs = [], force_alwayslin
         linked into the shared library.
       linker_inputs: A sequence of LinkerInput objects to link into the library
         we're creating.
-      force_alwayslink_inputs: A sequence of LinkerInput objects to link into
+      alwayslink_owners: A sequence of LinkerInput objects to link into
         the library we're creating as if they had the alwayslink attribute set
-        to 1.
+        to True.
       **kwargs: Arguments to cc_common.link.
 
     Returns:
       The created dynamic library (a File).
     """
     cc_toolchain, feature_configuration = _cc_toolchain_info(ctx)
-    if force_alwayslink_inputs and not link_deps_statically:
-        fail("force_alwayslink can only handle static libraries.")
+    if alwayslink_owners and not link_deps_statically:
+        fail("Can only apply alwayslink to static libraries.")
     linking_outputs = cc_common.link(
         actions = ctx.actions,
         feature_configuration = feature_configuration,
         cc_toolchain = cc_toolchain,
         linking_contexts = [cc_common.create_linking_context(
             linker_inputs = depset(
-                linker_inputs + _force_alwayslink(ctx, force_alwayslink_inputs),
+                _apply_alwayslink(ctx, linker_inputs, alwayslink_owners),
             ),
         )],
         name = name,
