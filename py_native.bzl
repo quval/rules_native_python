@@ -85,19 +85,22 @@ py_native_module = rule(
 )
 
 def _nativedeps_impl(ctx):
-    target_label = ctx.attr._actual.label
-    module = ctx.actions.declare_file("lib" + ctx.attr._library_name + ".so")
-    link_with_placeholder(ctx = ctx, output = module, target_label = target_label)
-    runfiles = ctx.runfiles([module])
-    return [DefaultInfo(runfiles = runfiles)]
+    if ctx.attr._actual[DefaultInfo].default_runfiles.files:
+        target_label = ctx.attr._actual.label
+        module = ctx.actions.declare_file("lib" + ctx.attr._library_name + ".so")
+        link_with_placeholder(ctx = ctx, output = module, target_label = target_label)
+        runfiles = ctx.runfiles([module])
+        return [DefaultInfo(runfiles = runfiles)]
+    else:
+        return []
 
 nativedeps = rule(
     implementation = _nativedeps_impl,
     fragments = ["cpp"],
     attrs = {
         "_actual": attr.label(default = ACTUAL_NATIVEDEPS_SETTING),
-        "_library_name": attr.string(default = "nativedeps"),
         "_cc_toolchain": attr.label(default = "@bazel_tools//tools/cpp:current_cc_toolchain"),
+        "_library_name": attr.string(default = "nativedeps"),
     },
 )
 
@@ -179,30 +182,30 @@ configure_nativedeps = _make_configure_nativedeps_rule(NATIVEDEPS_TARGET)
 configure_test_nativedeps = _make_configure_nativedeps_rule(TEST_NATIVEDEPS_TARGET)
 
 def _py_toplevel_target_impl(ctx):
-    # Only force-alwayslink those libraries that are direct dependencies of
-    # native modules.
-    nativedeps_lib = link_so(
-        ctx = ctx,
-        name = ctx.label.name,
-        linker_inputs = depset(
-            order = "topological",
-            transitive = [
-                dep[PyNativeDepsetInfo].deps_linker_inputs
+    linker_inputs = depset(order = "topological", transitive = [
+        dep[PyNativeDepsetInfo].deps_linker_inputs
+        for dep in ctx.attr.deps
+    ]).to_list()
+
+    if linker_inputs:
+        nativedeps_lib = link_so(
+            ctx = ctx,
+            name = ctx.label.name,
+            linker_inputs = linker_inputs,
+            alwayslink_owners = depset(transitive = [
+                dep[PyNativeDepsetInfo].direct_deps
                 for dep in ctx.attr.deps
-            ],
-        ).to_list(),
-        alwayslink_owners = depset(transitive = [
-            dep[PyNativeDepsetInfo].direct_deps
-            for dep in ctx.attr.deps
-        ]).to_list(),
-        stamp = ctx.attr.stamp,
-        link_deps_statically = True,
-    )
-    runfiles = _merge_runfiles(
-        ctx.runfiles(files = [nativedeps_lib]),
-        [dep[PyNativeDepsetInfo].runfiles for dep in ctx.attr.deps],
-    )
-    return [DefaultInfo(runfiles = runfiles)]
+            ]).to_list(),
+            stamp = ctx.attr.stamp,
+            link_deps_statically = True,
+        )
+        runfiles = _merge_runfiles(
+            ctx.runfiles(files = [nativedeps_lib]),
+            [dep[PyNativeDepsetInfo].runfiles for dep in ctx.attr.deps],
+        )
+        return [DefaultInfo(runfiles = runfiles)]
+    else:
+        return []
 
 py_library_deps = rule(
     implementation = _py_toplevel_target_impl,
