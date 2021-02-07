@@ -47,9 +47,9 @@ def link_so(ctx, name, link_deps_statically, linker_inputs = [], alwayslink_owne
         linked into the shared library.
       linker_inputs: A sequence of LinkerInput objects to link into the library
         we're creating.
-      alwayslink_owners: A sequence of LinkerInput objects to link into
-        the library we're creating as if they had the alwayslink attribute set
-        to True.
+      alwayslink_owners: A sequence of Labels that need their LinkerInputs to
+        be linked to the library we're creating as if they had the alwayslink
+        attribute set to True.
       **kwargs: Arguments to cc_common.link.
 
     Returns:
